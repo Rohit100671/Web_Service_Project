@@ -45,7 +45,7 @@ def request_service_approval(request):
     #  Handle price updates properly
     if "price" in request.data:
         try:
-            price_value = Decimal(request.data['price'])  # Convert string to Decimal
+            price_value = Decimal(request.data['price'])      # Convert string to Decimal
             service.price = price_value
         except (ValueError, TypeError):
             return Response({"error": "Invalid price format. Must be a valid decimal number."}, status=400)
