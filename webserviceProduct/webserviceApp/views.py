@@ -1,14 +1,13 @@
-
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, parser_classes, permission_classes
 from rest_framework import status
 from webserviceApp.models import ProviderService
-from webserviceApp.serializers import ProviderServiceSerializer, UserSerializer
+from webserviceApp.serializers import BookinghistorySerializer, ProviderServiceSerializer, ServicereviewSerializer, UserSerializer
 from bson import ObjectId
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.permissions import AllowAny
 from django.contrib.auth.hashers import check_password
-from .models import BookingHistory, User
+from .models import BookingHistory, ServiceReview, User
 from django.core.files.storage import default_storage
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.core.files.storage import default_storage
@@ -17,13 +16,60 @@ from django.utils.timezone import now
 import datetime
 from datetime import datetime, timedelta
 from django.utils.timezone import now
-
 from django.db import models
+from datetime import datetime
+from django.utils.timezone import localtime
+from bson.decimal128 import Decimal128
+from decimal import Decimal
 
-#---------------------------------------------------------------------------
-# For Provider Services - 
+
+#----------------------------- For Admin -----------------------------------# 
 
 
+#For thr admin approval -  
+@api_view(['PUT'])
+@permission_classes([AllowAny])
+def request_service_approval(request):
+    service_id = request.data.get('service_id')
+    status = request.data.get('status')
+
+    try:
+        service = ProviderService.objects.get(_id=ObjectId(service_id))
+    except ProviderService.DoesNotExist:
+        return Response({"error": "Service not found or already processed"}, status=404)
+
+    #  Convert `Decimal128` to `Decimal` before using it
+    if isinstance(service.price, Decimal128):  
+        service.price = service.price.to_decimal()  
+
+    #  Handle price updates properly
+    if "price" in request.data:
+        try:
+            price_value = Decimal(request.data['price'])  # Convert string to Decimal
+            service.price = price_value
+        except (ValueError, TypeError):
+            return Response({"error": "Invalid price format. Must be a valid decimal number."}, status=400)
+
+    # Handle approval and rejection
+    if status == "approve":
+        service.status = "approved"
+        service.save()
+        return Response({"message": "Service approved successfully"}, status=200)
+
+    elif status == "reject":
+        service.status = "rejected"
+        service.save()
+        return Response({"message": "Service rejected"}, status=200)
+
+    return Response({"error": "Invalid status"}, status=400)  # Handle invalid status
+
+
+
+
+#------------------------- For Provider ---------------------------#
+
+
+#For Creating New Services - 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 @parser_classes([MultiPartParser, FormParser])
@@ -35,6 +81,7 @@ def create_service(request):
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+#For Get the Perticular Services -
 @api_view(['POST'])
 @permission_classes([AllowAny])
 @parser_classes([MultiPartParser, FormParser])
@@ -48,6 +95,7 @@ def get_service(request, _id):
     return Response(serializer.data)
 
 
+#For Updatethe Services -
 @api_view(['PUT'])
 @permission_classes([AllowAny])
 @parser_classes([MultiPartParser, FormParser])
@@ -80,6 +128,7 @@ def update_service(request, _id):
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+#For the Deleting the services -
 @api_view(['DELETE'])
 @permission_classes([AllowAny])
 def delete_service(request, _id):
@@ -98,6 +147,7 @@ def delete_service(request, _id):
     return Response({'message': "Deleted Data Successfully"}, status=status.HTTP_204_NO_CONTENT)
 
 
+#For get the all Services -
 @api_view(['POST'])
 @permission_classes([AllowAny])
 @parser_classes([MultiPartParser, FormParser])
@@ -107,9 +157,11 @@ def list_services(request):
     return Response(serializer.data)
 
 
-# -----------------------------------------------------------------------------
 
-# Register a user
+#--------------------- For LogIn, New Register And LogOut ------------------------#
+
+
+# Register a New User - 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register(request):
@@ -120,8 +172,8 @@ def register(request):
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-# Login a user (session-based)
 
+# Login a user -
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def login(request):
@@ -130,11 +182,9 @@ def login(request):
     selected_role = request.data.get('role')
 
     try:
-        # Find the user by username
         user = User.objects.get(username=username)
         
         if check_password(password, user.password):
-            # Check if the selected role matches the user's actual role
             if selected_role == user.role:
                 
                 if user.role == 'admin':
@@ -161,7 +211,7 @@ def login(request):
 
 
 
-# For logOut -
+# For logOut User -
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def logout(request):
@@ -172,8 +222,12 @@ def logout(request):
         return Response({'error': 'Something went wrong during logout'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-#---------------------------------------------------------------------------------
 
+
+# ---------------------------- For Client --------------------------------#
+
+
+# For the search a perticular service -
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def search_services(request):
@@ -192,39 +246,45 @@ def search_services(request):
 
 
 
+# For Booking A perticualr Services -
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def book_service(request):
     service_id = request.data.get("service_id")
-    user_name = request.data.get("user_name")
+    user_id = request.data.get("user_id")
 
-    if not service_id or not user_name:
-        return Response({"error": "Service ID and User Name are required"}, status=400)
+    if not service_id or not user_id:
+        return Response({"error": "Service ID and User ID are required"}, status=400)
 
     try:
         service = ProviderService.objects.get(_id=ObjectId(service_id))
     except ProviderService.DoesNotExist:
         return Response({"error": "Service not found"}, status=404)
 
-    # Allow booking only within the service's defined time slot
-    current_time = now().time()
+    # Ensure we get the local server time for accurate comparison
+    current_time = now().astimezone().time()
+    print(f"Current server time: {current_time}")  # Debug log
+
     if service.time_slot:
         try:
             start_time_str, end_time_str = service.time_slot.split("-")
             start_time = datetime.strptime(start_time_str.strip(), "%H:%M").time()
             end_time = datetime.strptime(end_time_str.strip(), "%H:%M").time()
 
+            print(f"Start Time: {start_time}, End Time: {end_time}")  # Debug log
+
+            # Allow booking only within the exact range
             if not (start_time <= current_time <= end_time):
                 return Response({
-                    "error": f"Service is only available between {start_time_str} and {end_time_str}"},
-                    status=400
-                )
+                    "error": f"Booking allowed only between {start_time_str} and {end_time_str}",
+                    "status": 400
+                })
         except ValueError:
             return Response({"error": "Invalid time slot format. Use HH:MM-HH:MM"}, status=400)
 
     # Save the booking request in the BookingHistory model
     BookingHistory.objects.create(
-        user_name=user_name,
+        user_id=user_id,
         service_name=service.name,
         service_type=service.service_type
     )
@@ -232,26 +292,76 @@ def book_service(request):
     return Response({"message": "Booking request has been successfully submitted."}, status=201)
 
 
-class ProviderService(models.Model):
-    _id = models.ObjectIdField(default=ObjectId, primary_key=True)
-
-    SERVICE_TYPES = [
-        ('plumbing', 'plumbing'),
-        ('electrical', 'electrical'), 
-    ]    
-
-    name = models.CharField(max_length=100)
-    service_type = models.CharField(max_length=20, choices=SERVICE_TYPES)
-    description = models.TextField()
-    price = models.DecimalField(max_digits=10, decimal_places=2)
+# For Client Histories - 
+@api_view(["GET"])
+@permission_classes([AllowAny]) 
+def user_booking_history(request):
+    user_id = request.data.get('user_id')
     
-    # Add image and video fields
-    image = models.ImageField(upload_to='service_images/', blank=True, null=True)
-    video = models.FileField(upload_to='service_videos/', blank=True, null=True)
-    time_slot = models.CharField(max_length=20, blank=True, null=True)
+    if not user_id:
+        return Response({"error": "User ID is required"}, status=400)
 
-    def __str__(self):
-        return f"{self.name} - {self.get_service_type_display()}"
+    bookings = BookingHistory.objects.filter(user_id=user_id)
 
-    class Meta:
-        db_table = 'Provider_services'
+    if not bookings:
+        return Response({"message": "No booking history found"}, status=404)
+
+    serializer = BookinghistorySerializer(bookings, many=True) 
+    return Response({"history":serializer.data})
+
+
+
+# For the User Review on the perticular services or perticular provideer - 
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def submit_review(request):
+    user_name = request.data.get("user_name")
+    user_id = request.data.get("user_id")
+    provider_name = request.data.get("provider_name")
+    provider_id = request.data.get("provider_id")
+    service_type = request.data.get("service_type")
+    service_name = request.data.get("service_name")
+    service_id = request.data.get("service_id")
+    rating = request.data.get("rating")
+    review = request.data.get("review")
+
+    if not user_name or not provider_id or not provider_name or not service_type or not service_name or not service_id or not rating:
+        return Response({"error": "User Name, Service Provider, and Rating are required"}, status=400)
+
+    if not (1 <= int(rating) <= 5):
+        return Response({"error": "Rating must be between 1 and 5"}, status=400)
+
+    ServiceReview.objects.create(
+        user_name=user_name,
+        user_id=user_id,
+        provider_name=provider_name,
+        provider_id=provider_id,
+        service_type=service_type,
+        service_name=service_name,
+        service_id=service_id,
+        rating=rating,
+        review=review
+    )
+
+    return Response({"message": "Review submitted successfully"}, status=201)
+
+
+
+# For the get the user Reviews on a perticular services or Provider -
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def view_reviews(request):
+    service_id = request.data.get("service_id") 
+
+    if not service_id:
+        return Response({"error": "Service Provider is required"}, status=400)
+
+    reviews = ServiceReview.objects.filter(service_id=service_id)
+    
+    if not reviews:
+        return Response({"message": "No reviews found for this provider"}, status=404)
+    
+    serializer = ServicereviewSerializer(reviews, many=True) 
+
+    return Response({"reviews": serializer.data})
+
